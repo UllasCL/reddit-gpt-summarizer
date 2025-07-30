@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: reddit-gpt-summarizer
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app/main.py --server.port $PORT --server.address 0.0.0.0
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.4
+      - key: OPENAI_ORG_ID
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: REDDIT_CLIENT_ID
+        sync: false
+      - key: REDDIT_CLIENT_SECRET
+        sync: false
+      - key: REDDIT_USERNAME
+        sync: false
+      - key: REDDIT_PASSWORD
+        sync: false
+      - key: REDDIT_USER_AGENT
+        value: "linux:com.youragent.reddit-gpt-summarizer:v1.0.0 (by /u/yourusername)"
+      - key: ANTHROPIC_API_KEY
+        sync: false 
