@@ -37,7 +37,6 @@ class EnvVarsLoader:
         # Add your validation logic here
 
     @staticmethod
-    @Logger.log
     def load_env() -> EnvVars:
         """
         Load the environment variables from the .env file.
@@ -101,5 +100,8 @@ class EnvVarsLoader:
         EnvVarsLoader.validate_env_vars(env_vars)
 
         EnvVarsLoader._env_vars = env_vars
+
+        # Log only the REDDIT_CLIENT_ID for security
+        app_logger.info(f"REDDIT_CLIENT_ID: {reddit_client_id}")
 
         return env_vars
