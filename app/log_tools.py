@@ -6,7 +6,7 @@ import os
 from collections.abc import Callable
 from datetime import datetime
 from functools import wraps
-from typing import Any, TypeVar
+from typing import Any, TypeVar, Union
 
 from config import ConfigVars
 
@@ -67,7 +67,7 @@ class Logger:
     def log(
         cls,
         func: Callable[..., T],
-        logger: logging.Logger | None = None,
+        logger: Union[logging.Logger, None] = None,
     ) -> Callable[..., T]:
         """Decorator to log function calls and return values."""
         if logger is None:

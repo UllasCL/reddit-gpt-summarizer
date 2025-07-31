@@ -17,8 +17,10 @@ env_vars = EnvVarsLoader.load_env()
 # openai.organization = env_vars["OPENAI_ORG_ID"]
 
 os.environ["OPENAI_API_KEY"] = env_vars["OPENAI_API_KEY"]
-os.environ["ANTHROPIC_API_KEY"] = env_vars["ANTHROPIC_API_KEY"]
-os.environ["GEMINI_API_KEY"] = env_vars["GEMINI_API_KEY"]
+if env_vars["ANTHROPIC_API_KEY"]:
+    os.environ["ANTHROPIC_API_KEY"] = env_vars["ANTHROPIC_API_KEY"]
+if env_vars["GEMINI_API_KEY"]:
+    os.environ["GEMINI_API_KEY"] = env_vars["GEMINI_API_KEY"]
 
 
 @Logger.log

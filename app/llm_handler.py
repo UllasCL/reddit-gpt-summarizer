@@ -2,14 +2,14 @@
 
 from data_types.summary import GenerateSettings
 from log_tools import Logger
-from pyrate_limiter import Duration, Limiter, RequestRate
+from pyrate_limiter import Duration, Limiter, Rate
 from services.litellm_connector import complete_litellm_text
 from utils.llm_utils import validate_max_tokens
 from utils.streamlit_decorators import error_to_streamlit
 
 app_logger = Logger.get_app_logger()
 
-rate_limits = (RequestRate(10, Duration.MINUTE),)  # 10 requests a minute
+rate_limits = (Rate(10, Duration.MINUTE),)  # 10 requests a minute
 
 # Create the rate limiter
 # Pyrate Limiter instance
@@ -28,7 +28,8 @@ def complete_text(
     validate_max_tokens(max_tokens)
 
     try:
-        limiter.ratelimit("complete_text")
+        # Try to acquire a rate limit slot
+        limiter.try_acquire("complete_text")
 
         return complete_litellm_text(
             prompt=prompt,

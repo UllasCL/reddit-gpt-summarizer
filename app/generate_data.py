@@ -4,7 +4,7 @@ import logging
 import re
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 import praw  # type: ignore
 from config import ConfigVars
@@ -30,7 +30,7 @@ ProgressCallback = Optional[Callable[[int, int, str, str], None]]
 def summarize_summary(
     selftext: str,
     settings: GenerateSettings,
-    title: str | None = None,
+    title: Union[str, None] = None,
     max_tokens: int = config.MAX_BODY_TOKEN_SIZE,
 ) -> str:
     """Summarize the response."""
@@ -105,8 +105,8 @@ def get_reddit_praw(
         submission.comment_sort = "top"  # sort comments by score (upvotes - downvotes)
         submission.comments.replace_more(limit=None)
 
-        title: str | None = submission.title
-        selftext: str | None = submission.selftext
+        title: Union[str, None] = submission.title
+        selftext: Union[str, None] = submission.selftext
 
         if not title:
             raise ValueError("No title found in JSON")
@@ -169,7 +169,7 @@ def generate_summary_data(
             f"============\nSUMMARY COUNT: {i}\n"
             f"============\nPROMPT: {prompt}\n\n"
             f"{summary}\n===========================\n"
-            for i, (prompt, summary) in enumerate(zip(prompts, summaries, strict=False))
+            for i, (prompt, summary) in enumerate(zip(prompts, summaries))
         )
 
         return output

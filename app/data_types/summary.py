@@ -1,15 +1,15 @@
 """Data types for the application."""
 
-from typing import TypedDict
+from typing import TypedDict, Union
 
 
 class RedditData(TypedDict):
     """Data for a summary."""
 
     title: str
-    selftext: str | None
+    selftext: Union[str, None]
     subreddit: str
-    comments: str | None
+    comments: Union[str, None]
 
 
 class GenerateSettings(TypedDict):

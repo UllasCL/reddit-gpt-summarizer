@@ -4,7 +4,7 @@ a summary of the reddit thread.
 """
 
 import os
-from typing import TypedDict
+from typing import TypedDict, Union
 
 from dotenv import load_dotenv
 from log_tools import Logger
@@ -19,11 +19,11 @@ class EnvVars(TypedDict):
     OPENAI_API_KEY: str
     REDDIT_CLIENT_ID: str
     REDDIT_CLIENT_SECRET: str
-    REDDIT_USERNAME: str | None
-    REDDIT_PASSWORD: str | None
+    REDDIT_USERNAME: Union[str, None]
+    REDDIT_PASSWORD: Union[str, None]
     REDDIT_USER_AGENT: str
-    ANTHROPIC_API_KEY: str
-    GEMINI_API_KEY: str
+    ANTHROPIC_API_KEY: Union[str, None]
+    GEMINI_API_KEY: Union[str, None]
 
 
 class EnvVarsLoader:
@@ -62,22 +62,29 @@ class EnvVarsLoader:
         reddit_username = os.getenv("REDDIT_USERNAME")
         reddit_password = os.getenv("REDDIT_PASSWORD")
         reddit_user_agent = os.getenv("REDDIT_USER_AGENT")
-        anthropic_api_key = os.environ["ANTHROPIC_API_KEY"]
-        gemini_api_key = os.environ["GEMINI_API_KEY"]
+        anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+        gemini_api_key = os.getenv("GEMINI_API_KEY")
 
-        if org_id is None or api_key is None:
-            err_msg = "Missing OpenAI API key or organization ID."
-            app_logger.error(err_msg)
-            raise ValueError(err_msg)
+        # Use default values for development if API keys are not provided
+        if org_id is None:
+            org_id = "your_openai_org_id_here"
+            app_logger.warning("Using default OpenAI organization ID. Please set OPENAI_ORG_ID in .env file.")
+        
+        if api_key is None:
+            api_key = "your_openai_api_key_here"
+            app_logger.warning("Using default OpenAI API key. Please set OPENAI_API_KEY in .env file.")
 
-        if (
-            reddit_client_id is None
-            or reddit_client_secret is None
-            or reddit_user_agent is None
-        ):
-            err_msg = "Missing Reddit client ID or client secret."
-            app_logger.error(err_msg)
-            raise ValueError(err_msg)
+        if reddit_client_id is None:
+            reddit_client_id = "your_reddit_client_id_here"
+            app_logger.warning("Using default Reddit client ID. Please set REDDIT_CLIENT_ID in .env file.")
+        
+        if reddit_client_secret is None:
+            reddit_client_secret = "your_reddit_client_secret_here"
+            app_logger.warning("Using default Reddit client secret. Please set REDDIT_CLIENT_SECRET in .env file.")
+        
+        if reddit_user_agent is None:
+            reddit_user_agent = "linux:com.youragent.reddit-gpt-summarizer:v1.0.0 (by /u/yourusername)"
+            app_logger.warning("Using default Reddit user agent. Please set REDDIT_USER_AGENT in .env file.")
 
         env_vars: EnvVars = {
             "OPENAI_ORG_ID": org_id,

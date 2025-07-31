@@ -4,6 +4,7 @@ UI functions
 # Import necessary modules
 
 import logging
+from typing import Union
 
 import streamlit as st
 from config import ConfigVars
@@ -15,11 +16,11 @@ from utils.common import is_valid_reddit_url, replace_last_token_with_json, save
 config = ConfigVars()
 
 
-def render_input_box() -> str | None:
+def render_input_box() -> Union[str, None]:
     """
     Render the input box for the reddit URL and return its value.
     """
-    reddit_url: str | None = st.text_area("Enter REDDIT URL:", config.REDDIT_URL)
+    reddit_url: Union[str, None] = st.text_area("Enter REDDIT URL:", config.REDDIT_URL)
     if not reddit_url:
         return None
 
@@ -31,8 +32,8 @@ def render_input_box() -> str | None:
 
 def render_output(
     reddit_url: str,
-    app_logger: logging.Logger | None = None,
-    settings: GenerateSettings | None = None,
+    app_logger: Union[logging.Logger, None] = None,
+    settings: Union[GenerateSettings, None] = None,
 ) -> None:
     """
     Render the placeholder for the summary.
@@ -94,9 +95,9 @@ def render_output(
 
 
 def render_layout(
-    app_logger: logging.Logger | None = None,
-    reddit_url: str | None = None,
-    settings: GenerateSettings | None = None,
+    app_logger: Union[logging.Logger, None] = None,
+    reddit_url: Union[str, None] = None,
+    settings: Union[GenerateSettings, None] = None,
 ) -> None:
     """
     Render the layout of the app.
