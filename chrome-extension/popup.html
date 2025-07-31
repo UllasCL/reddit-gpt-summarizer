@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Reddit GPT Summarizer</title>
+    <style>
+        body {
+            width: 350px;
+            padding: 16px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 16px;
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .header p {
+            margin: 4px 0 0 0;
+            font-size: 12px;
+            opacity: 0.8;
+        }
+
+        .setup-wizard {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+
+        .setup-wizard h2 {
+            margin: 0 0 12px 0;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .api-section {
+            margin-bottom: 12px;
+        }
+
+        .input-group {
+            margin-bottom: 8px;
+        }
+
+        .input-group label {
+            display: block;
+            font-size: 11px;
+            margin-bottom: 4px;
+            font-weight: 500;
+        }
+
+        .input-group input {
+            width: 100%;
+            padding: 6px 8px;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            font-size: 11px;
+            box-sizing: border-box;
+        }
+
+        .input-group input::placeholder {
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .help-text {
+            font-size: 10px;
+            opacity: 0.7;
+            margin-top: 4px;
+        }
+
+        .help-links {
+            margin-top: 8px;
+        }
+
+        .help-links a {
+            color: #ffd700;
+            text-decoration: none;
+            font-size: 10px;
+            margin-right: 8px;
+        }
+
+        .help-links a:hover {
+            text-decoration: underline;
+        }
+
+        button {
+            width: 100%;
+            padding: 10px;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-bottom: 8px;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        button.primary {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+        }
+
+        button.primary:hover:not(:disabled) {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-1px);
+        }
+
+        button.secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+        }
+
+        button.secondary:hover:not(:disabled) {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .status {
+            padding: 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            margin-bottom: 12px;
+            text-align: center;
+        }
+
+        .status.success {
+            background: rgba(76, 175, 80, 0.2);
+            border: 1px solid rgba(76, 175, 80, 0.3);
+        }
+
+        .status.error {
+            background: rgba(244, 67, 54, 0.2);
+            border: 1px solid rgba(244, 67, 54, 0.3);
+        }
+
+        .status.loading {
+            background: rgba(33, 150, 243, 0.2);
+            border: 1px solid rgba(33, 150, 243, 0.3);
+        }
+
+        .status.info {
+            background: rgba(255, 193, 7, 0.2);
+            border: 1px solid rgba(255, 193, 7, 0.3);
+        }
+
+        .summary, .stats {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 12px;
+            font-size: 11px;
+            line-height: 1.4;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .summary strong, .stats strong {
+            color: #ffd700;
+        }
+
+        .summary {
+            background: rgba(76, 175, 80, 0.1);
+            border-color: rgba(76, 175, 80, 0.3);
+        }
+
+        .stats {
+            background: rgba(33, 150, 243, 0.1);
+            border-color: rgba(33, 150, 243, 0.3);
+        }
+
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🤖 Reddit GPT Summarizer</h1>
+        <p>AI-powered Reddit post analysis</p>
+    </div>
+
+    <!-- Setup Wizard -->
+    <div id="setupWizard" class="setup-wizard">
+        <h2>🔑 Welcome! Let's get started</h2>
+        <p style="font-size: 11px; margin-bottom: 12px;">To analyze Reddit posts, you'll need API keys from OpenAI and Reddit.</p>
+        
+        <div class="api-section">
+            <div class="input-group">
+                <label for="openaiKey">OpenAI API Key:</label>
+                <input type="password" id="openaiKey" placeholder="sk-...">
+                <div class="help-text">Get your key from <a href="https://platform.openai.com/api-keys" target="_blank">OpenAI Platform</a></div>
+            </div>
+            
+            <div class="input-group">
+                <label for="redditClientId">Reddit Client ID:</label>
+                <input type="text" id="redditClientId" placeholder="Your Reddit app client ID">
+                <div class="help-text">Create a Reddit app at <a href="https://www.reddit.com/prefs/apps" target="_blank">Reddit Apps</a></div>
+            </div>
+            
+            <div class="input-group">
+                <label for="redditClientSecret">Reddit Client Secret:</label>
+                <input type="password" id="redditClientSecret" placeholder="Your Reddit app secret">
+                <div class="help-text">Found in your Reddit app settings</div>
+            </div>
+        </div>
+        
+        <button id="saveKeysBtn" class="primary">💾 Save & Continue</button>
+        
+        <div class="help-links">
+            <a href="https://github.com/your-repo/reddit-gpt-summarizer" target="_blank">📖 Setup Guide</a>
+            <a href="https://platform.openai.com/api-keys" target="_blank">🔑 Get OpenAI Key</a>
+            <a href="https://www.reddit.com/prefs/apps" target="_blank">🔑 Get Reddit Keys</a>
+        </div>
+    </div>
+
+    <!-- Main Interface -->
+    <div id="mainInterface" class="hidden">
+        <div id="status" class="status info">🔑 Please configure your API keys</div>
+        
+        <button id="configureKeysBtn" class="secondary">⚙️ Configure API Keys</button>
+        <button id="analyzeBtn" class="primary" disabled>🔑 Configure API Keys First</button>
+        
+        <div id="summary" class="summary" style="display: none; margin-top: 12px;"></div>
+        <div id="stats" class="stats" style="display: none; margin-top: 8px;"></div>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html> 

@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "Reddit GPT Summarizer",
+  "version": "1.0.0",
+  "description": "Analyze Reddit posts with AI-powered insights using Reddit API and OpenAI",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://reddit.com/*",
+    "https://www.reddit.com/*",
+    "https://oauth.reddit.com/*",
+    "https://api.openai.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://reddit.com/*",
+        "https://www.reddit.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Reddit GPT Summarizer"
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+} 

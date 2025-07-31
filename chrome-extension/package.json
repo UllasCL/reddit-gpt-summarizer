@@ -1,0 +1,29 @@
+{
+  "name": "reddit-gpt-summarizer-extension",
+  "version": "1.0.0",
+  "description": "Chrome extension for summarizing Reddit posts using GPT models",
+  "main": "popup.js",
+  "scripts": {
+    "build": "echo 'No build process needed for Chrome extension'",
+    "test": "echo 'No tests configured'",
+    "lint": "echo 'No linting configured'"
+  },
+  "keywords": [
+    "chrome-extension",
+    "reddit",
+    "gpt",
+    "summarizer",
+    "ai",
+    "web-scraping"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/reddit-gpt-summarizer"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/reddit-gpt-summarizer/issues"
+  },
+  "homepage": "https://github.com/yourusername/reddit-gpt-summarizer#readme"
+} 
