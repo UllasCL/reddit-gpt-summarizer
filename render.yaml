@@ -23,4 +23,5 @@ services:
       - key: REDDIT_USER_AGENT
         value: "linux:com.youragent.reddit-gpt-summarizer:v1.0.0 (by /u/yourusername)"
       - key: ANTHROPIC_API_KEY
-        sync: false 
+        sync: false
+    # Force new deployment - API server configuration 
