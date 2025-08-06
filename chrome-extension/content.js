@@ -340,8 +340,8 @@ class RedditAnalyzer {
         }
     }
 
-    // Convert Reddit URL to API format
-    convertUrlToApiFormat(url) {
+    // Convert Reddit URL to API format with different sorting options
+    convertUrlToApiFormat(url, sort = 'top') {
         // Remove trailing slash and .json if present
         url = url.replace(/\/$/, '').replace(/\.json$/, '');
         
@@ -349,42 +349,98 @@ class RedditAnalyzer {
         const match = url.match(/\/comments\/([a-zA-Z0-9]+)/);
         if (match) {
             const postId = match[1];
-            return `https://oauth.reddit.com/comments/${postId}.json?limit=1000&depth=10`;
+            console.log(`Extracted post ID from URL: ${postId}`);
+            // Try different sorting options to get more comments
+            // Add showmore=true to explicitly request more comments
+            return `https://oauth.reddit.com/comments/${postId}.json?limit=1000&depth=25&sort=${sort}&showmore=true&raw_json=1`;
         }
         
         throw new Error('Invalid Reddit URL format');
     }
 
-    // Fetch Reddit post data using Reddit API
+    // Fetch Reddit post data using Reddit API with multiple sorting attempts
     async fetchRedditData(url) {
         try {
             console.log('Getting Reddit access token...');
             const token = await this.getRedditToken();
             
-            console.log('Converting URL to API format...');
-            const apiUrl = this.convertUrlToApiFormat(url);
+            // Extract post ID from URL for additional calls
+            const urlMatch = url.match(/\/comments\/[a-zA-Z0-9]+/);
+            const postId = urlMatch ? urlMatch[1] : null;
             
-            console.log('Fetching Reddit data...');
-            const response = await fetch(apiUrl, {
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'User-Agent': this.redditUserAgent
+            // Try different sorting options to get more comments
+            const sortOptions = ['top', 'best', 'new', 'controversial'];
+            let bestData = null;
+            let bestCommentCount = 0;
+            
+            for (const sort of sortOptions) {
+                try {
+                    console.log(`Trying sort: ${sort}`);
+                    const apiUrl = this.convertUrlToApiFormat(url, sort);
+            
+                    console.log('Fetching Reddit data...');
+                    const response = await fetch(apiUrl, {
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'User-Agent': this.redditUserAgent
+                        }
+                    });
+
+                    if (!response.ok) {
+                        console.log(`Sort ${sort} failed with status: ${response.status}`);
+                        continue;
+                    }
+
+                    const data = await response.json();
+                    const parsedData = await this.parseRedditData(data, token);
+                    
+                    console.log(`Sort ${sort} returned ${parsedData.total_comments} comments`);
+                    
+                    if (parsedData.total_comments > bestCommentCount) {
+                        bestCommentCount = parsedData.total_comments;
+                        bestData = parsedData;
+                        console.log(`New best: ${bestCommentCount} comments with sort ${sort}`);
+                    }
+                    
+                    // If we got a good number of comments, we can stop
+                    if (parsedData.total_comments >= parsedData.post.num_comments * 0.8) {
+                        console.log(`Got ${parsedData.total_comments} comments (${((parsedData.total_comments / parsedData.post.num_comments) * 100).toFixed(1)}% of total), stopping search`);
+                        break;
+                    }
+                    
+                    // Small delay between attempts
+                    await new Promise(resolve => setTimeout(resolve, 200));
+                    
+                } catch (error) {
+                    console.error(`Error with sort ${sort}:`, error);
+                    continue;
                 }
-            });
-
-            if (!response.ok) {
-                throw new Error(`Reddit API error: ${response.status}`);
             }
-
-            const data = await response.json();
-            return this.parseRedditData(data, token);
+            
+            // If we didn't get enough comments, try additional API calls
+            if (bestData && bestData.total_comments < bestData.post.num_comments * 0.7 && postId) {
+                console.log('Not enough comments found, trying additional API calls...');
+                const additionalData = await this.fetchAdditionalComments(postId, token, 'top');
+                
+                if (additionalData && additionalData.total_comments > bestData.total_comments) {
+                    console.log(`Additional API calls improved comment count from ${bestData.total_comments} to ${additionalData.total_comments}`);
+                    bestData = additionalData;
+                }
+            }
+            
+            if (bestData) {
+                console.log(`Using best result: ${bestData.total_comments} comments`);
+                return bestData;
+            } else {
+                throw new Error('Failed to fetch Reddit data with any sorting option');
+            }
         } catch (error) {
             console.error('Error fetching Reddit data:', error);
             throw error;
         }
     }
 
-    // Parse Reddit API response with improved comment extraction
+    // Parse Reddit API response with PRAW-style comment extraction
     async parseRedditData(data, token = null) {
         if (!data || !data[0] || !data[0].data || !data[0].data.children || !data[0].data.children[0]) {
             throw new Error('Invalid Reddit API response');
@@ -392,6 +448,11 @@ class RedditAnalyzer {
 
         const post = data[0].data.children[0].data;
         const comments = data[1] ? data[1].data.children : [];
+
+        console.log(`Post reports ${post.num_comments} total comments`);
+        console.log(`Initial API response contains ${comments.length} top-level comments`);
+        console.log(`Post ID: ${post.id}`);
+        console.log(`Token available: ${!!token}`);
 
         // Extract post information
         const postData = {
@@ -407,8 +468,11 @@ class RedditAnalyzer {
             permalink: post.permalink
         };
 
-        // Extract all comments with improved handling
-        const allComments = await this.extractAllCommentsImproved(comments, 0, post.id, token);
+        // Use PRAW's exact approach: replace_more() + breadth-first traversal
+        const allComments = await this.replaceMoreCommentsPRAWStyle(comments, post.id, token, null, 0);
+
+        console.log(`Final comment count: ${allComments.length} out of ${post.num_comments} reported`);
+        console.log(`Comment fetch rate: ${((allComments.length / post.num_comments) * 100).toFixed(1)}%`);
 
         return {
             post: postData,
@@ -417,13 +481,104 @@ class RedditAnalyzer {
         };
     }
 
-    // Fetch additional comments from MoreComments objects
-    async fetchMoreComments(postId, commentIds, token) {
+    // Implement PRAW's replace_more() logic in JavaScript
+    async replaceMoreComments(comments, postId, token, limit = null, threshold = 0) {
+        console.log('=== Implementing PRAW replace_more() logic ===');
+        
+        let moreCommentsFound = 0;
+        let totalReplaced = 0;
+        
+        // Recursively process comments and replace MoreComments
+        const processCommentLevel = async (commentList, level = 0) => {
+            const processedComments = [];
+            
+            for (const comment of commentList) {
+                if (comment.kind === 't1') {
+                    // Regular comment - keep it and process its replies
+                    const processedComment = { ...comment };
+                    
+                    if (comment.data.replies && comment.data.replies.data && comment.data.replies.data.children) {
+                        processedComment.data.replies.data.children = await processCommentLevel(
+                            comment.data.replies.data.children, 
+                            level + 1
+                        );
+                    }
+                    
+                    processedComments.push(processedComment);
+                } else if (comment.kind === 'more') {
+                    // MoreComments object - replace it with actual comments
+                    moreCommentsFound++;
+                    const moreCount = comment.data.count || 0;
+                    
+                    console.log(`Level ${level}: Found MoreComments with ${moreCount} comments`);
+                    
+                    // Check threshold
+                    if (moreCount < threshold) {
+                        console.log(`Level ${level}: Skipping MoreComments (${moreCount} < ${threshold})`);
+                        continue;
+                    }
+                    
+                    // Check limit
+                    if (limit !== null && totalReplaced >= limit) {
+                        console.log(`Level ${level}: Reached limit (${totalReplaced}/${limit})`);
+                        continue;
+                    }
+                    
+                    // Fetch the additional comments
+                    if (postId && token && comment.data.children && comment.data.children.length > 0) {
+                        try {
+                            console.log(`Level ${level}: Replacing MoreComments with ${comment.data.children.length} comment IDs`);
+                            
+                            // Format comment IDs like PRAW does
+                            const commentIds = comment.data.children.map(id => {
+                                if (id.startsWith('t1_')) {
+                                    return id;
+                                } else {
+                                    return `t1_${id}`;
+                                }
+                            });
+                            
+                            const moreComments = await this.fetchMoreCommentsPRAWStyle(postId, commentIds, token);
+                                           
+                            // Recursively process the fetched comments
+                            const processedMoreComments = await processCommentLevel(moreComments, level);
+                            processedComments.push(...processedMoreComments);
+                            
+                            totalReplaced++;
+                            console.log(`Level ${level}: Successfully replaced MoreComments with ${processedMoreComments.length} comments`);
+                            
+                        } catch (error) {
+                            console.error(`Level ${level}: Failed to replace MoreComments:`, error);
+                        }
+                    }
+                } else {
+                    console.log(`Level ${level}: Unknown comment kind: ${comment.kind}`);
+                }
+            }
+            
+            return processedComments;
+        };
+        
+        const result = await processCommentLevel(comments);
+        
+        console.log(`=== PRAW-style replace_more() completed ===`);
+        console.log(`Found ${moreCommentsFound} MoreComments objects`);
+        console.log(`Replaced ${totalReplaced} MoreComments objects`);
+        console.log(`Final comment count: ${result.length}`);
+        
+        return result;
+    }
+
+    // PRAW-style MoreComments fetching
+    async fetchMoreCommentsPRAWStyle(postId, commentIds, token) {
         try {
+            console.log(`PRAW-style fetchMoreComments: ${commentIds.length} comment IDs`);
+            
+            // Use PRAW's approach: single API call with all comment IDs
             const childrenParam = commentIds.join(',');
             const moreChildrenUrl = `https://oauth.reddit.com/api/morechildren.json?link_id=t3_${postId}&children=${childrenParam}&limit_children=false&api_type=json`;
             
-            console.log('Fetching more comments from:', moreChildrenUrl);
+            console.log(`PRAW-style API call: ${moreChildrenUrl}`);
             
             const response = await fetch(moreChildrenUrl, {
                 headers: {
@@ -437,9 +592,18 @@ class RedditAnalyzer {
             }
 
             const data = await response.json();
-            return data.json.data.things || [];
+            console.log(`PRAW-style response:`, data);
+            
+            if (data.json && data.json.data && data.json.data.things) {
+                const comments = data.json.data.things.filter(item => item.kind === 't1');
+                console.log(`PRAW-style returned ${comments.length} valid comments`);
+                return comments;
+            } else {
+                console.log(`PRAW-style response structure unexpected:`, data);
+                return [];
+            }
         } catch (error) {
-            console.error('Error fetching more comments:', error);
+            console.error('PRAW-style fetchMoreComments error:', error);
             return [];
         }
     }
@@ -447,8 +611,14 @@ class RedditAnalyzer {
     // Improved comment extraction that handles MoreComments
     async extractAllCommentsImproved(comments, level = 0, postId = null, token = null) {
         const extractedComments = [];
+        let moreCommentsFound = 0;
+        let totalMoreComments = 0;
+        
+        console.log(`Level ${level}: Processing ${comments.length} items`);
         
         for (const comment of comments) {
+            console.log(`Level ${level}: Processing item kind: ${comment.kind}`);
+            
             if (comment.kind === 't1') { // Comment type
                 const commentData = comment.data;
                 
@@ -463,18 +633,34 @@ class RedditAnalyzer {
 
                 // Extract replies if they exist
                 if (commentData.replies && commentData.replies.data && commentData.replies.data.children) {
+                    console.log(`Level ${level}: Processing replies for comment by ${commentData.author}`);
                     extractedComment.replies = await this.extractAllCommentsImproved(commentData.replies.data.children, level + 1, postId, token);
                 }
 
                 extractedComments.push(extractedComment);
             } else if (comment.kind === 'more') {
                 // Handle MoreComments objects - these represent "load more comments" links
+                moreCommentsFound++;
+                totalMoreComments += comment.data.count || 0;
                 console.log(`Found MoreComments object at level ${level} with ${comment.data.count} more comments`);
+                console.log(`MoreComments data:`, comment.data);
                 
                 if (postId && token && comment.data.children && comment.data.children.length > 0) {
+                    console.log(`Attempting to fetch ${comment.data.children.length} comment IDs:`, comment.data.children);
+                    
+                    // Check if comment IDs need t1_ prefix
+                    const commentIds = comment.data.children.map(id => {
+                        if (id.startsWith('t1_')) {
+                            return id;
+                        } else {
+                            return `t1_${id}`;
+                        }
+                    });
+                    console.log(`Processed comment IDs:`, commentIds);
+                    
                     try {
                         // Fetch the additional comments
-                        const moreComments = await this.fetchMoreComments(postId, comment.data.children, token);
+                        const moreComments = await this.fetchMoreComments(postId, commentIds, token);
                         
                         // Recursively extract these additional comments
                         const additionalComments = await this.extractAllCommentsImproved(moreComments, level, postId, token);
@@ -486,8 +672,17 @@ class RedditAnalyzer {
                     }
                 } else {
                     console.log('Cannot fetch more comments - missing postId, token, or comment IDs');
+                    console.log('postId:', postId);
+                    console.log('token:', !!token);
+                    console.log('comment.data.children:', comment.data.children);
                 }
+            } else {
+                console.log(`Level ${level}: Unknown comment kind: ${comment.kind}`);
             }
+        }
+
+        if (moreCommentsFound > 0) {
+            console.log(`Level ${level}: Found ${moreCommentsFound} MoreComments objects with ${totalMoreComments} total additional comments`);
         }
 
         return extractedComments;
@@ -559,10 +754,10 @@ class RedditAnalyzer {
     // Single API call method with all comments
     async generateSingleSummary(redditData) {
         console.log('=== Making single API call with all data ===');
-        const { post, comments } = redditData;
-        
-        // Format the data for OpenAI
-        const formattedData = `
+            const { post, comments } = redditData;
+            
+            // Format the data for OpenAI
+            const formattedData = `
 Reddit Post Information:
 Title: ${post.title}
 Subreddit: r/${post.subreddit}
@@ -578,37 +773,37 @@ Comments (${comments.length} total):
 ${this.formatCommentsForOpenAI(comments)}
 `;
 
-        const response = await fetch('https://api.openai.com/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${this.openaiApiKey}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                model: 'gpt-3.5-turbo',
-                messages: [
-                    {
-                        role: 'system',
-                        content: 'You are a helpful assistant that analyzes Reddit posts and provides comprehensive summaries. Focus on the main topic, key points, community reactions, and overall sentiment.'
-                    },
-                    {
-                        role: 'user',
-                        content: `Please provide a comprehensive analysis of this Reddit post and its comments:\n\n${formattedData}`
-                    }
-                ],
+            const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${this.openaiApiKey}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    model: 'gpt-3.5-turbo',
+                    messages: [
+                        {
+                            role: 'system',
+                            content: 'You are a helpful assistant that analyzes Reddit posts and provides comprehensive summaries. Focus on the main topic, key points, community reactions, and overall sentiment.'
+                        },
+                        {
+                            role: 'user',
+                            content: `Please provide a comprehensive analysis of this Reddit post and its comments:\n\n${formattedData}`
+                        }
+                    ],
                 max_tokens: 1500,
-                temperature: 0.7
-            })
-        });
+                    temperature: 0.7
+                })
+            });
 
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(`OpenAI API error: ${errorData.error?.message || response.status}`);
-        }
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(`OpenAI API error: ${errorData.error?.message || response.status}`);
+            }
 
-        const data = await response.json();
+            const data = await response.json();
         console.log('=== Single API call completed ===');
-        return data.choices[0].message.content;
+            return data.choices[0].message.content;
     }
 
     // Main function to analyze Reddit post
@@ -820,6 +1015,153 @@ ${this.formatCommentsForOpenAI(comments)}
             console.error('Error storing results:', error);
         }
     }
+
+    // Fetch additional comments using different API parameters
+    async fetchAdditionalComments(postId, token, sort = 'top') {
+        try {
+            console.log(`Fetching additional comments with sort: ${sort}`);
+            
+            // Try different API endpoints to get more comments
+            const apiUrls = [
+                `https://oauth.reddit.com/comments/${postId}.json?limit=1000&depth=25&sort=${sort}&showmore=true&raw_json=1`,
+                `https://oauth.reddit.com/comments/${postId}.json?limit=1000&depth=50&sort=${sort}&raw_json=1`,
+                `https://oauth.reddit.com/comments/${postId}.json?limit=2000&depth=25&sort=${sort}&raw_json=1`
+            ];
+            
+            let bestData = null;
+            let bestCommentCount = 0;
+            
+            for (let i = 0; i < apiUrls.length; i++) {
+                try {
+                    console.log(`Trying additional API call ${i + 1}: ${apiUrls[i]}`);
+                    
+                    const response = await fetch(apiUrls[i], {
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'User-Agent': this.redditUserAgent
+                        }
+                    });
+
+                    if (!response.ok) {
+                        console.log(`Additional API call ${i + 1} failed with status: ${response.status}`);
+                        continue;
+                    }
+
+                    const data = await response.json();
+                    const parsedData = await this.parseRedditData(data, token);
+                    
+                    console.log(`Additional API call ${i + 1} returned ${parsedData.total_comments} comments`);
+                    
+                    if (parsedData.total_comments > bestCommentCount) {
+                        bestCommentCount = parsedData.total_comments;
+                        bestData = parsedData;
+                        console.log(`New best from additional call: ${bestCommentCount} comments`);
+                    }
+                    
+                    // Small delay between attempts
+                    await new Promise(resolve => setTimeout(resolve, 200));
+                    
+                } catch (error) {
+                    console.error(`Error with additional API call ${i + 1}:`, error);
+                    continue;
+                }
+            }
+            
+            return bestData;
+        } catch (error) {
+            console.error('Error fetching additional comments:', error);
+            return null;
+        }
+    }
+
+    // Implement PRAW's exact approach: replace_more() + breadth-first traversal
+    async replaceMoreCommentsPRAWStyle(comments, postId, token, limit = null, threshold = 0) {
+        console.log('=== Implementing PRAW replace_more() + breadth-first traversal ===');
+        
+        // Step 1: Replace all MoreComments objects (like PRAW's replace_more())
+        const processedComments = await this.replaceMoreComments(comments, postId, token, limit, threshold);
+        
+        // Step 2: Use PRAW's breadth-first traversal approach
+        console.log('=== Starting PRAW-style breadth-first traversal ===');
+        
+        const allComments = [];
+        const commentQueue = [...processedComments]; // Seed with top-level comments
+        
+        while (commentQueue.length > 0) {
+            const comment = commentQueue.shift(); // pop(0) equivalent
+            
+            if (comment.kind === 't1') {
+                // Extract comment data like PRAW does
+                const commentData = {
+                    author: comment.data.author,
+                    body: comment.data.body,
+                    score: comment.data.score,
+                    created_utc: comment.data.created_utc,
+                    level: 0, // Will be calculated during traversal
+                    replies: []
+                };
+                
+                allComments.push(commentData);
+                // console.log(`PRAW traversal: Processing comment by ${commentData.author}`);
+                
+                // Add replies to queue (extend equivalent)
+                if (comment.data.replies && comment.data.replies.data && comment.data.replies.data.children) {
+                    // Add level information to replies
+                    const repliesWithLevel = comment.data.replies.data.children.map(reply => ({
+                        ...reply,
+                        level: (comment.level || 0) + 1
+                    }));
+                    commentQueue.push(...repliesWithLevel);
+                }
+            }
+        }
+        
+        console.log(`=== PRAW-style traversal completed ===`);
+        console.log(`Total comments extracted: ${allComments.length}`);
+        
+        return allComments;
+    }
+
+    // Alternative: Direct PRAW-style list() method equivalent
+    async getCommentsPRAWListStyle(comments, postId, token, limit = null, threshold = 0) {
+        console.log('=== Implementing PRAW list() method equivalent ===');
+        
+        // Step 1: Replace MoreComments (like PRAW's replace_more())
+        const processedComments = await this.replaceMoreComments(comments, postId, token, limit, threshold);
+        
+        // Step 2: Use PRAW's list() method approach (breadth-first)
+        const allComments = [];
+        const commentQueue = [...processedComments];
+        
+        while (commentQueue.length > 0) {
+            const comment = commentQueue.shift();
+            
+            if (comment.kind === 't1') {
+                const commentData = {
+                    author: comment.data.author,
+                    body: comment.data.body,
+                    score: comment.data.score,
+                    created_utc: comment.data.created_utc,
+                    level: comment.level || 0,
+                    replies: []
+                };
+                
+                allComments.push(commentData);
+                
+                // Add replies to queue for breadth-first traversal
+                if (comment.data.replies && comment.data.replies.data && comment.data.replies.data.children) {
+                    const repliesWithLevel = comment.data.replies.data.children.map(reply => ({
+                        ...reply,
+                        level: commentData.level + 1
+                    }));
+                    commentQueue.push(...repliesWithLevel);
+                }
+            }
+        }
+        
+        console.log(`PRAW list() equivalent: ${allComments.length} comments`);
+        return allComments;
+    }
 }
 
 // Initialize analyzer
@@ -827,9 +1169,22 @@ const analyzer = new RedditAnalyzer();
 
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    console.log('Content script received message:', request);
+    
+    if (request.action === 'checkStatus') {
+        console.log('Status check received - content script is loaded');
+        sendResponse({ 
+            success: true, 
+            message: 'Content script is loaded and ready',
+            timestamp: Date.now()
+        });
+        return true;
+    }
+    
     if (request.action === 'setApiKeys') {
+        console.log('Setting API keys...');
         analyzer.setApiKeys(request.openaiKey, request.redditClientId, request.redditClientSecret);
-        sendResponse({ success: true });
+        sendResponse({ success: true, message: 'API keys set successfully' });
         return true;
     }
     
@@ -872,14 +1227,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
-    if (request.action === 'checkStatus') {
-        // Check if extension is configured
-        chrome.storage.local.get(['setupComplete'], (result) => {
-            sendResponse({ configured: result.setupComplete === true });
-        });
-        return true;
-    }
-
     if (request.action === 'testPopup') {
         // Test function to manually show popup
         analyzer.testShowPopup();
@@ -892,6 +1239,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: true });
         return true;
     }
+    
+    // Default response for unknown actions
+    console.log('Unknown action received:', request.action);
+    sendResponse({ success: false, error: 'Unknown action' });
+    return true;
 });
 
 // Initialize post detection when page loads

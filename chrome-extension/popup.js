@@ -21,6 +21,9 @@ class PopupController {
         this.loadSavedKeys();
         this.checkFirstTime();
         
+        // Add test button for debugging
+        this.addTestButton();
+        
         // Check for existing analysis results
         setTimeout(() => {
             this.checkForExistingResults();
@@ -414,28 +417,71 @@ class PopupController {
                 return;
             }
 
+            console.log('Checking if content script is loaded...');
+            
+            // First, try to check if content script is loaded
+            try {
+                const statusResponse = await chrome.tabs.sendMessage(tab.id, {
+                    action: 'checkStatus'
+                });
+                console.log('Content script status response:', statusResponse);
+            } catch (error) {
+                console.error('Content script not loaded, attempting to inject...');
+                
+                // Try to inject the content script
+                try {
+                    await chrome.scripting.executeScript({
+                        target: { tabId: tab.id },
+                        files: ['content.js']
+                    });
+                    console.log('Content script injected successfully');
+                    
+                    // Wait a moment for the script to initialize
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                } catch (injectError) {
+                    console.error('Failed to inject content script:', injectError);
+                    this.updateStatus('❌ Failed to load extension on this page. Please refresh the page and try again.', 'error');
+                    this.isAnalyzing = false;
+                    return;
+                }
+            }
+
             console.log('Sending API keys to content script...');
             // Send API keys to content script
-            await chrome.tabs.sendMessage(tab.id, {
-                action: 'setApiKeys',
-                openaiKey: this.apiKeys.openaiKey,
-                redditClientId: this.apiKeys.redditClientId,
-                redditClientSecret: this.apiKeys.redditClientSecret
-            });
+            try {
+                await chrome.tabs.sendMessage(tab.id, {
+                    action: 'setApiKeys',
+                    openaiKey: this.apiKeys.openaiKey,
+                    redditClientId: this.apiKeys.redditClientId,
+                    redditClientSecret: this.apiKeys.redditClientSecret
+                });
+                console.log('API keys sent successfully');
+            } catch (error) {
+                console.error('Failed to send API keys:', error);
+                this.updateStatus('❌ Failed to communicate with page. Please refresh and try again.', 'error');
+                this.isAnalyzing = false;
+                return;
+            }
 
             console.log('Sending analyze request to content script...');
             // Send analyze request
-            const response = await chrome.tabs.sendMessage(tab.id, {
-                action: 'analyze',
-                url: tab.url
-            });
+            try {
+                const response = await chrome.tabs.sendMessage(tab.id, {
+                    action: 'analyze',
+                    url: tab.url
+                });
 
-            console.log('Received response from content script:', response);
-            if (response.success) {
-                this.displaySummary(response.summary, response.data);
-                this.updateStatus('✅ Analysis complete!', 'success');
-            } else {
-                this.updateStatus(`❌ Error: ${response.error}`, 'error');
+                console.log('Received response from content script:', response);
+                if (response && response.success) {
+                    this.displaySummary(response.summary, response.data);
+                    this.updateStatus('✅ Analysis complete!', 'success');
+                } else {
+                    const errorMsg = response ? response.error : 'Unknown error occurred';
+                    this.updateStatus(`❌ Error: ${errorMsg}`, 'error');
+                }
+            } catch (error) {
+                console.error('Failed to send analyze request:', error);
+                this.updateStatus('❌ Failed to start analysis. Please refresh the page and try again.', 'error');
             }
         } catch (error) {
             console.error('Analysis error:', error);
@@ -540,6 +586,41 @@ class PopupController {
         } else {
             console.error('Stats element not found or no data!');
         }
+    }
+
+    // Test function to check if content script is loaded
+    async testContentScriptConnection() {
+        try {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            console.log('Testing connection to tab:', tab.url);
+            
+            if (!tab.url || !tab.url.includes('reddit.com')) {
+                console.log('Not on Reddit page');
+                return false;
+            }
+            
+            const response = await chrome.tabs.sendMessage(tab.id, {
+                action: 'checkStatus'
+            });
+            
+            console.log('Content script connection test successful:', response);
+            return true;
+        } catch (error) {
+            console.error('Content script connection test failed:', error);
+            return false;
+        }
+    }
+
+    // Add test button to popup for debugging
+    addTestButton() {
+        const testBtn = document.createElement('button');
+        testBtn.textContent = 'Test Connection';
+        testBtn.style.cssText = 'position: fixed; top: 10px; right: 10px; z-index: 1000; padding: 5px; background: #ff6b6b; color: white; border: none; border-radius: 3px; cursor: pointer;';
+        testBtn.onclick = async () => {
+            const isConnected = await this.testContentScriptConnection();
+            alert(isConnected ? '✅ Content script is loaded!' : '❌ Content script not found. Please refresh the page.');
+        };
+        document.body.appendChild(testBtn);
     }
 }
 
