@@ -9,6 +9,7 @@ class RedditAnalyzer {
         this.redditUserAgent = 'RedditAnalyzer/1.0.0';
         this.extensionDetected = false;
         this.popupShown = false;
+        this.isAnalyzing = false; // Add flag to prevent duplicate analysis
     }
 
     // Set API keys from popup
@@ -376,15 +377,15 @@ class RedditAnalyzer {
             }
 
             const data = await response.json();
-            return this.parseRedditData(data);
+            return this.parseRedditData(data, token);
         } catch (error) {
             console.error('Error fetching Reddit data:', error);
             throw error;
         }
     }
 
-    // Parse Reddit API response
-    parseRedditData(data) {
+    // Parse Reddit API response with improved comment extraction
+    async parseRedditData(data, token = null) {
         if (!data || !data[0] || !data[0].data || !data[0].data.children || !data[0].data.children[0]) {
             throw new Error('Invalid Reddit API response');
         }
@@ -406,8 +407,8 @@ class RedditAnalyzer {
             permalink: post.permalink
         };
 
-        // Extract all comments recursively
-        const allComments = this.extractAllComments(comments);
+        // Extract all comments with improved handling
+        const allComments = await this.extractAllCommentsImproved(comments, 0, post.id, token);
 
         return {
             post: postData,
@@ -416,7 +417,83 @@ class RedditAnalyzer {
         };
     }
 
-    // Extract all comments recursively
+    // Fetch additional comments from MoreComments objects
+    async fetchMoreComments(postId, commentIds, token) {
+        try {
+            const childrenParam = commentIds.join(',');
+            const moreChildrenUrl = `https://oauth.reddit.com/api/morechildren.json?link_id=t3_${postId}&children=${childrenParam}&limit_children=false&api_type=json`;
+            
+            console.log('Fetching more comments from:', moreChildrenUrl);
+            
+            const response = await fetch(moreChildrenUrl, {
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'User-Agent': this.redditUserAgent
+                }
+            });
+
+            if (!response.ok) {
+                throw new Error(`MoreComments API error: ${response.status}`);
+            }
+
+            const data = await response.json();
+            return data.json.data.things || [];
+        } catch (error) {
+            console.error('Error fetching more comments:', error);
+            return [];
+        }
+    }
+
+    // Improved comment extraction that handles MoreComments
+    async extractAllCommentsImproved(comments, level = 0, postId = null, token = null) {
+        const extractedComments = [];
+        
+        for (const comment of comments) {
+            if (comment.kind === 't1') { // Comment type
+                const commentData = comment.data;
+                
+                const extractedComment = {
+                    author: commentData.author,
+                    body: commentData.body,
+                    score: commentData.score,
+                    created_utc: commentData.created_utc,
+                    level: level,
+                    replies: []
+                };
+
+                // Extract replies if they exist
+                if (commentData.replies && commentData.replies.data && commentData.replies.data.children) {
+                    extractedComment.replies = await this.extractAllCommentsImproved(commentData.replies.data.children, level + 1, postId, token);
+                }
+
+                extractedComments.push(extractedComment);
+            } else if (comment.kind === 'more') {
+                // Handle MoreComments objects - these represent "load more comments" links
+                console.log(`Found MoreComments object at level ${level} with ${comment.data.count} more comments`);
+                
+                if (postId && token && comment.data.children && comment.data.children.length > 0) {
+                    try {
+                        // Fetch the additional comments
+                        const moreComments = await this.fetchMoreComments(postId, comment.data.children, token);
+                        
+                        // Recursively extract these additional comments
+                        const additionalComments = await this.extractAllCommentsImproved(moreComments, level, postId, token);
+                        extractedComments.push(...additionalComments);
+                        
+                        console.log(`Successfully fetched ${additionalComments.length} additional comments at level ${level}`);
+                    } catch (error) {
+                        console.error('Failed to fetch more comments:', error);
+                    }
+                } else {
+                    console.log('Cannot fetch more comments - missing postId, token, or comment IDs');
+                }
+            }
+        }
+
+        return extractedComments;
+    }
+
+    // Extract all comments recursively (keeping old method for compatibility)
     extractAllComments(comments, level = 0) {
         const extractedComments = [];
 
@@ -461,15 +538,31 @@ class RedditAnalyzer {
         return formatted;
     }
 
-    // Generate summary using OpenAI API
+    // Generate summary using OpenAI API - single call with all data
     async generateSummaryWithOpenAI(redditData) {
         try {
-            console.log('Generating summary with OpenAI...');
+            console.log('=== Starting generateSummaryWithOpenAI ===');
             
             const { post, comments } = redditData;
+            console.log(`Processing ${comments.length} comments in single API call...`);
             
-            // Format the data for OpenAI
-            const formattedData = `
+            // Always use single API call with all data
+            const result = await this.generateSingleSummary(redditData);
+            console.log('=== Single API call completed ===');
+            return result;
+        } catch (error) {
+            console.error('Error generating summary:', error);
+            throw error;
+        }
+    }
+
+    // Single API call method with all comments
+    async generateSingleSummary(redditData) {
+        console.log('=== Making single API call with all data ===');
+        const { post, comments } = redditData;
+        
+        // Format the data for OpenAI
+        const formattedData = `
 Reddit Post Information:
 Title: ${post.title}
 Subreddit: r/${post.subreddit}
@@ -485,53 +578,63 @@ Comments (${comments.length} total):
 ${this.formatCommentsForOpenAI(comments)}
 `;
 
-            const response = await fetch('https://api.openai.com/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${this.openaiApiKey}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    model: 'gpt-3.5-turbo',
-                    messages: [
-                        {
-                            role: 'system',
-                            content: 'You are a helpful assistant that analyzes Reddit posts and provides comprehensive summaries. Focus on the main topic, key points, community reactions, and overall sentiment.'
-                        },
-                        {
-                            role: 'user',
-                            content: `Please provide a comprehensive analysis of this Reddit post and its comments:\n\n${formattedData}`
-                        }
-                    ],
-                    max_tokens: 1000,
-                    temperature: 0.7
-                })
-            });
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${this.openaiApiKey}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: 'gpt-3.5-turbo',
+                messages: [
+                    {
+                        role: 'system',
+                        content: 'You are a helpful assistant that analyzes Reddit posts and provides comprehensive summaries. Focus on the main topic, key points, community reactions, and overall sentiment.'
+                    },
+                    {
+                        role: 'user',
+                        content: `Please provide a comprehensive analysis of this Reddit post and its comments:\n\n${formattedData}`
+                    }
+                ],
+                max_tokens: 1500,
+                temperature: 0.7
+            })
+        });
 
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(`OpenAI API error: ${errorData.error?.message || response.status}`);
-            }
-
-            const data = await response.json();
-            return data.choices[0].message.content;
-        } catch (error) {
-            console.error('Error generating summary:', error);
-            throw error;
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(`OpenAI API error: ${errorData.error?.message || response.status}`);
         }
+
+        const data = await response.json();
+        console.log('=== Single API call completed ===');
+        return data.choices[0].message.content;
     }
 
     // Main function to analyze Reddit post
     async analyzeRedditPost(url) {
+        // Prevent duplicate analysis calls
+        if (this.isAnalyzing) {
+            console.log('Analysis already in progress, ignoring duplicate request');
+            return {
+                success: false,
+                error: 'Analysis already in progress'
+            };
+        }
+
+        this.isAnalyzing = true;
+        console.log('Starting Reddit analysis...');
+        
         try {
-            console.log('Starting Reddit analysis...');
-            
             // Fetch data from Reddit API
             const redditData = await this.fetchRedditData(url);
             console.log(`Fetched ${redditData.total_comments} comments`);
             
             // Generate summary with OpenAI
             const summary = await this.generateSummaryWithOpenAI(redditData);
+            
+            // Store results for later retrieval
+            this.storeResults(summary, redditData);
             
             return {
                 success: true,
@@ -544,6 +647,177 @@ ${this.formatCommentsForOpenAI(comments)}
                 success: false,
                 error: error.message
             };
+        } finally {
+            this.isAnalyzing = false; // Reset flag when done
+        }
+    }
+
+    // Continue analysis in background when popup is closed
+    continueAnalysisInBackground() {
+        console.log('Analysis will continue in background...');
+        
+        // Store analysis state in localStorage so it can be retrieved later
+        const analysisState = {
+            timestamp: Date.now(),
+            url: window.location.href,
+            status: 'running'
+        };
+        
+        localStorage.setItem('redditAnalysisState', JSON.stringify(analysisState));
+        
+        // Show a notification to the user
+        this.showBackgroundAnalysisNotification();
+    }
+
+    // Show notification that analysis is continuing in background
+    showBackgroundAnalysisNotification() {
+        // Create a notification element
+        const notification = document.createElement('div');
+        notification.id = 'reddit-analysis-notification';
+        notification.innerHTML = `
+            <div class="reddit-analysis-notification-content">
+                <span class="reddit-analysis-notification-icon">🤖</span>
+                <span class="reddit-analysis-notification-text">
+                    Analysis continuing in background... 
+                    <a href="#" id="reddit-analysis-check-results">Check Results</a>
+                </span>
+                <button class="reddit-analysis-notification-close" id="reddit-analysis-notification-close">×</button>
+            </div>
+        `;
+
+        // Add styles
+        const style = document.createElement('style');
+        style.textContent = `
+            #reddit-analysis-notification {
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                z-index: 10001;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                border-radius: 8px;
+                box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+                color: white;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                max-width: 300px;
+                animation: slideInNotification 0.3s ease-out;
+            }
+
+            @keyframes slideInNotification {
+                from {
+                    transform: translateX(100%);
+                    opacity: 0;
+                }
+                to {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
+            }
+
+            .reddit-analysis-notification-content {
+                padding: 12px 16px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+
+            .reddit-analysis-notification-icon {
+                font-size: 16px;
+            }
+
+            .reddit-analysis-notification-text {
+                font-size: 12px;
+                line-height: 1.3;
+                flex-grow: 1;
+            }
+
+            .reddit-analysis-notification-text a {
+                color: white;
+                text-decoration: underline;
+                font-weight: 500;
+            }
+
+            .reddit-analysis-notification-close {
+                background: none;
+                border: none;
+                color: white;
+                font-size: 16px;
+                cursor: pointer;
+                padding: 0;
+                width: 20px;
+                height: 20px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                border-radius: 50%;
+                transition: background-color 0.2s;
+            }
+
+            .reddit-analysis-notification-close:hover {
+                background: rgba(255, 255, 255, 0.2);
+            }
+        `;
+
+        // Add to page
+        document.head.appendChild(style);
+        document.body.appendChild(notification);
+
+        // Add event listeners
+        const closeBtn = document.getElementById('reddit-analysis-notification-close');
+        const checkResultsBtn = document.getElementById('reddit-analysis-check-results');
+
+        if (closeBtn) {
+            closeBtn.addEventListener('click', () => {
+                notification.remove();
+            });
+        }
+
+        if (checkResultsBtn) {
+            checkResultsBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                notification.remove();
+                // Open the extension popup to check results
+                chrome.runtime.sendMessage({ action: 'openExtensionPopup' });
+            });
+        }
+
+        // Auto-remove after 10 seconds
+        setTimeout(() => {
+            if (notification.parentElement) {
+                notification.remove();
+            }
+        }, 10000);
+    }
+
+    // Get stored analysis results
+    getStoredResults() {
+        try {
+            const storedResults = localStorage.getItem('redditAnalysisResults');
+            if (storedResults) {
+                const results = JSON.parse(storedResults);
+                // Check if results are for the current page
+                if (results.url === window.location.href) {
+                    return results;
+                }
+            }
+        } catch (error) {
+            console.error('Error getting stored results:', error);
+        }
+        return null;
+    }
+
+    // Store analysis results
+    storeResults(summary, data) {
+        try {
+            const results = {
+                url: window.location.href,
+                timestamp: Date.now(),
+                summary: summary,
+                data: data
+            };
+            localStorage.setItem('redditAnalysisResults', JSON.stringify(results));
+            console.log('Analysis results stored');
+        } catch (error) {
+            console.error('Error storing results:', error);
         }
     }
 }
@@ -560,14 +834,42 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     
     if (request.action === 'analyze') {
+        console.log('Analyze request received:', request.url);
+        console.log('Current analysis state:', analyzer.isAnalyzing);
+        
         analyzer.analyzeRedditPost(request.url)
             .then(result => {
+                console.log('Analysis completed with result:', result.success);
                 sendResponse(result);
             })
             .catch(error => {
+                console.error('Analysis failed:', error);
                 sendResponse({ success: false, error: error.message });
             });
         return true; // Keep message channel open for async response
+    }
+
+    if (request.action === 'continueAnalysisInBackground') {
+        console.log('Continuing analysis in background...');
+        // Store the current analysis state so it can continue even if popup is closed
+        analyzer.continueAnalysisInBackground();
+        sendResponse({ success: true });
+        return true;
+    }
+
+    if (request.action === 'checkForResults') {
+        console.log('Checking for existing analysis results...');
+        const results = analyzer.getStoredResults();
+        if (results) {
+            sendResponse({ 
+                hasResults: true, 
+                summary: results.summary, 
+                data: results.data 
+            });
+        } else {
+            sendResponse({ hasResults: false });
+        }
+        return true;
     }
 
     if (request.action === 'checkStatus') {
@@ -584,12 +886,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: true });
         return true;
     }
-});
 
-// Listen for messages from popup to open extension
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'openPopup') {
         chrome.runtime.sendMessage({ action: 'openExtensionPopup' });
+        sendResponse({ success: true });
+        return true;
     }
 });
 

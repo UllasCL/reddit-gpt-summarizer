@@ -10,20 +10,21 @@ class PopupController {
             redditClientSecret: ''
         };
         this.isFirstTime = true;
+        this.isAnalyzing = false; // Track analysis state
         
-        this.initializeElements();
-        this.setupEventListeners();
-        
-        // Initialize with a slight delay to ensure DOM is ready
-        setTimeout(() => {
-            this.initialize();
-        }, 100);
+        this.initialize();
     }
 
     initialize() {
-        console.log('=== Starting Initialization ===');
+        this.initializeElements();
+        this.setupEventListeners(); // Add this missing call
         this.loadSavedKeys();
         this.checkFirstTime();
+        
+        // Check for existing analysis results
+        setTimeout(() => {
+            this.checkForExistingResults();
+        }, 500); // Small delay to ensure everything is loaded
     }
 
     initializeElements() {
@@ -55,8 +56,19 @@ class PopupController {
             redditClientIdInput: !!this.redditClientIdInput,
             redditClientSecretInput: !!this.redditClientSecretInput,
             saveKeysBtn: !!this.saveKeysBtn,
-            analyzeBtn: !!this.analyzeBtn
+            analyzeBtn: !!this.analyzeBtn,
+            statusElement: !!this.statusElement,
+            summaryElement: !!this.summaryElement,
+            statsElement: !!this.statsElement
         });
+
+        // Debug: Check if save button exists in DOM
+        const saveBtnInDOM = document.getElementById('saveKeysBtn');
+        console.log('Save button in DOM:', !!saveBtnInDOM);
+        if (saveBtnInDOM) {
+            console.log('Save button text:', saveBtnInDOM.textContent);
+            console.log('Save button disabled:', saveBtnInDOM.disabled);
+        }
     }
 
     loadSavedKeys() {
@@ -159,12 +171,24 @@ class PopupController {
         
         // Save API keys button
         if (this.saveKeysBtn) {
+            console.log('Save button found, adding event listener');
             this.saveKeysBtn.addEventListener('click', () => {
                 console.log('Save keys button clicked');
                 this.saveApiKeys();
             });
         } else {
             console.error('Save keys button not found!');
+            // Try to find it again
+            const saveBtn = document.getElementById('saveKeysBtn');
+            console.log('Trying to find save button again:', !!saveBtn);
+            if (saveBtn) {
+                console.log('Found save button on second try, adding event listener');
+                this.saveKeysBtn = saveBtn;
+                this.saveKeysBtn.addEventListener('click', () => {
+                    console.log('Save keys button clicked (second try)');
+                    this.saveApiKeys();
+                });
+            }
         }
 
         // Configure API keys button
@@ -195,6 +219,36 @@ class PopupController {
                 if (this.mainInterface && !this.mainInterface.classList.contains('hidden')) {
                     this.analyzeBtn.focus();
                 }
+            }
+        });
+
+        // Listen for popup close events
+        window.addEventListener('beforeunload', (event) => {
+            if (this.isAnalyzing) {
+                console.log('Popup closing during analysis, showing confirmation');
+                const confirmed = this.showCloseConfirmation();
+                if (!confirmed) {
+                    event.preventDefault();
+                    event.returnValue = '';
+                }
+            }
+        });
+
+        // Listen for visibility change (when user switches tabs)
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden' && this.isAnalyzing) {
+                console.log('Popup becoming hidden during analysis');
+                // Optionally show a notification or continue analysis in background
+                this.sendContinueAnalysisMessage();
+            }
+        });
+
+        // Listen for window focus/blur events
+        window.addEventListener('blur', () => {
+            if (this.isAnalyzing) {
+                console.log('Popup losing focus during analysis');
+                // Continue analysis in background
+                this.sendContinueAnalysisMessage();
             }
         });
 
@@ -245,6 +299,39 @@ class PopupController {
                 console.log('Keys saved manually');
                 this.refreshInterface();
             });
+        };
+
+        // Add function to test save button click
+        window.testSaveButton = () => {
+            console.log('Testing save button click...');
+            if (this.saveKeysBtn) {
+                console.log('Triggering save button click');
+                this.saveKeysBtn.click();
+            } else {
+                console.log('Save button not found, calling saveApiKeys directly');
+                this.saveApiKeys();
+            }
+        };
+
+        // Add function to check all elements
+        window.checkElements = () => {
+            console.log('=== Element Check ===');
+            console.log('saveKeysBtn:', !!this.saveKeysBtn);
+            console.log('openaiKeyInput:', !!this.openaiKeyInput);
+            console.log('redditClientIdInput:', !!this.redditClientIdInput);
+            console.log('redditClientSecretInput:', !!this.redditClientSecretInput);
+            
+            const saveBtnInDOM = document.getElementById('saveKeysBtn');
+            console.log('saveKeysBtn in DOM:', !!saveBtnInDOM);
+            
+            if (saveBtnInDOM) {
+                console.log('Save button properties:', {
+                    textContent: saveBtnInDOM.textContent,
+                    disabled: saveBtnInDOM.disabled,
+                    onclick: saveBtnInDOM.onclick,
+                    className: saveBtnInDOM.className
+                });
+            }
         };
     }
 
@@ -312,17 +399,22 @@ class PopupController {
     }
 
     async analyzeRedditPost() {
+        console.log('=== Starting Analysis ===');
+        this.isAnalyzing = true; // Set analyzing state
         this.updateStatus('🔍 Analyzing Reddit post...', 'loading');
         
         try {
             // Get current tab
             const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            console.log('Current tab:', tab.url);
             
             if (!tab.url || !tab.url.includes('reddit.com')) {
                 this.updateStatus('❌ Please navigate to a Reddit post page', 'error');
+                this.isAnalyzing = false; // Reset state
                 return;
             }
 
+            console.log('Sending API keys to content script...');
             // Send API keys to content script
             await chrome.tabs.sendMessage(tab.id, {
                 action: 'setApiKeys',
@@ -331,12 +423,14 @@ class PopupController {
                 redditClientSecret: this.apiKeys.redditClientSecret
             });
 
+            console.log('Sending analyze request to content script...');
             // Send analyze request
             const response = await chrome.tabs.sendMessage(tab.id, {
                 action: 'analyze',
                 url: tab.url
             });
 
+            console.log('Received response from content script:', response);
             if (response.success) {
                 this.displaySummary(response.summary, response.data);
                 this.updateStatus('✅ Analysis complete!', 'success');
@@ -346,6 +440,66 @@ class PopupController {
         } catch (error) {
             console.error('Analysis error:', error);
             this.updateStatus(`❌ Error: ${error.message}`, 'error');
+        } finally {
+            this.isAnalyzing = false; // Reset state
+            console.log('=== Analysis Complete ===');
+        }
+    }
+
+    // Show confirmation dialog when user tries to close during analysis
+    showCloseConfirmation() {
+        if (!this.isAnalyzing) {
+            return true; // Allow closing if not analyzing
+        }
+
+        const confirmed = confirm(
+            '🤔 Analysis in Progress\n\n' +
+            'You have an analysis running. Are you sure you want to close the popup?\n\n' +
+            '• The analysis will continue in the background\n' +
+            '• You can reopen the popup to see results\n' +
+            '• Click "Cancel" to keep the popup open'
+        );
+
+        if (confirmed) {
+            console.log('User confirmed closing popup during analysis');
+            // Optionally send a message to content script to continue analysis
+            this.sendContinueAnalysisMessage();
+        }
+
+        return confirmed;
+    }
+
+    // Send message to content script to continue analysis in background
+    async sendContinueAnalysisMessage() {
+        try {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (tab && tab.url && tab.url.includes('reddit.com')) {
+                await chrome.tabs.sendMessage(tab.id, {
+                    action: 'continueAnalysisInBackground'
+                });
+            }
+        } catch (error) {
+            console.error('Error sending continue analysis message:', error);
+        }
+    }
+
+    // Check for existing analysis results
+    async checkForExistingResults() {
+        try {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (tab && tab.url && tab.url.includes('reddit.com')) {
+                const response = await chrome.tabs.sendMessage(tab.id, {
+                    action: 'checkForResults'
+                });
+                
+                if (response && response.hasResults) {
+                    console.log('Found existing analysis results');
+                    this.displaySummary(response.summary, response.data);
+                    this.updateStatus('✅ Previous analysis results loaded', 'success');
+                }
+            }
+        } catch (error) {
+            console.error('Error checking for existing results:', error);
         }
     }
 
